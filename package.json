@@ -1,0 +1,19 @@
+{
+  "name": "careerpilot",
+  "private": true,
+  "version": "1.0.0",
+  "workspaces": [
+    "client",
+    "server"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run server\" \"npm run client\"",
+    "client": "npm --workspace client run dev",
+    "server": "npm --workspace server run dev",
+    "seed": "npm --workspace server run seed",
+    "build": "npm --workspace client run build"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}
