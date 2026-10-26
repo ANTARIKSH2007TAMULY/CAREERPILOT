@@ -1,5 +1,8 @@
 import https from 'node:https';
 import Job from '../models/Job.js';
+import { mapPool } from '../utils/mapPool.js';
+import { normalizeJobRecord } from './jobs/jobSchema.js';
+import { filterJobsByLast30Days, isJobPostedWithinLast30Days, parseVerifiedPostingDate } from './jobs/jobDateUtils.js';
 
 const ADZUNA_REQUEST_TIMEOUT_MS = 15000;
 /** Prefer IPv4: undici fetch can fail when IPv6 is unreachable on the host network. */
@@ -7,13 +10,6 @@ const ADZUNA_CONNECT_FAMILY = 4;
 
 const DEFAULT_ADZUNA_APP_ID = 'test-app-id';
 const DEFAULT_ADZUNA_APP_KEY = 'test-app-key';
-
-const STOP_WORDS = new Set([
-  'the', 'with', 'that', 'this', 'from', 'your', 'have', 'into', 'over', 'their', 'about',
-  'there', 'will', 'been', 'where', 'what', 'when', 'should', 'could', 'would', 'build',
-  'teams', 'working', 'through', 'across', 'using', 'within', 'after', 'before', 'other',
-  'skills', 'experience', 'engineer', 'engineering', 'developer', 'development', 'product',
-]);
 
 export const hasAdzunaCredentials = ({ appId = process.env.ADZUNA_APP_ID, appKey = process.env.ADZUNA_APP_KEY } = {}) => {
   return Boolean(String(appId || '').trim() && String(appKey || '').trim());
@@ -69,102 +65,83 @@ const adzunaHttpsGet = (urlString, { signal } = {}) =>
     req.end();
   });
 
-const formatSalary = (salaryMin, salaryMax) => {
-  if (!salaryMin && !salaryMax) return '';
-
-  const min = Number(salaryMin || salaryMax || 0);
-  const max = Number(salaryMax || salaryMin || 0);
-
-  if (!min && !max) return '';
-
-  const currency = min >= 50000 || max >= 50000 ? '£' : '$';
-  const formatValue = (value) => Math.round(value).toLocaleString();
-
-  if (min && max && min !== max) {
-    return `${currency}${formatValue(min)} - ${currency}${formatValue(max)}`;
-  }
-
-  const singleValue = min || max;
-  return `${currency}${formatValue(singleValue)}`;
-};
-
 const inferJobType = (result = {}) => {
   const contractType = String(result.contract_type || '').toLowerCase();
   const contractTime = String(result.contract_time || '').toLowerCase();
+  const title = String(result.title || '');
 
+  // 1. Structured provider fields first
   if (contractTime === 'part_time') return 'Part-time';
-  if (contractType === 'contract' || contractType === 'temporary') return 'Contract';
   if (contractType === 'internship') return 'Internship';
-  return 'Full-time';
+  if (contractType === 'contract' || contractType === 'temporary') return 'Contract';
+  if (contractTime === 'full_time' || contractType === 'permanent') return 'Full-time';
+
+  // 2. Conservative title-based check with word boundaries (never match "internal" or description text)
+  if (/\b(intern|internship|internships|co-op|coop|trainee|apprentice|apprenticeship)\b/i.test(title)) return 'Internship';
+  if (/\b(part[-_\s]?time)\b/i.test(title)) return 'Part-time';
+  if (/\b(contract|contractor|freelance|temp|temporary)\b/i.test(title)) return 'Contract';
+
+  return undefined;
 };
 
 const inferWorkMode = (result = {}, fallbackLocation = '') => {
-  const location = `${result.location?.display_name || fallbackLocation || ''} ${result.title || ''}`.toLowerCase();
+  const loc = String(result.location?.display_name || fallbackLocation || '');
+  const title = String(result.title || '');
+  const desc = String(result.description || '');
+  const text = `${loc} ${title} ${desc}`.toLowerCase();
 
-  if (location.includes('remote')) return 'Remote';
-  if (location.includes('hybrid')) return 'Hybrid';
-  return 'On-site';
-};
+  // 1. Check for hybrid
+  if (/\b(hybrid|partially remote|part-remote|hybrid work)\b/i.test(text)) return 'Hybrid';
 
-const inferExperienceLevel = (value = '') => {
-  const text = value.toLowerCase();
+  // 2. Check for explicit remote (exclude "remote control", "remote sensing")
+  if (/\b(fully remote|100% remote|work from home|wfh|telecommute|anywhere in the world|remote role|remote position|remote -|remote \/|flexible \/ remote)\b/i.test(text)) {
+    return 'Remote';
+  }
+  if (/\b(remote)\b/i.test(text) && !/\b(remote sensing|remote control)\b/i.test(text)) {
+    return 'Remote';
+  }
 
-  if (text.includes('senior') || text.includes('lead')) return 'Senior';
-  if (text.includes('mid') || text.includes('intermediate')) return 'Mid';
-  if (text.includes('intern')) return 'Entry';
-  return 'Entry';
-};
+  // 3. Check for explicit on-site (do not match standalone "office" to avoid Microsoft Office / Office Assistant)
+  if (/\b(on[-_\s]?site|in[-_\s]?office|work from office|wfo|at the office|on premise|on-premise)\b/i.test(text)) {
+    return 'On-site';
+  }
 
-const extractSkills = (title = '', description = '') => {
-  const text = `${title} ${description}`
-    .toLowerCase()
-    .replace(/[^a-z0-9\s+-]/g, ' ')
-    .split(/\s+/)
-    .filter((word) => word.length > 3 && !STOP_WORDS.has(word) && !/^https?$/.test(word))
-    .slice(0, 8);
-
-  const unique = [...new Set(text)];
-  if (unique.length > 0) return unique;
-
-  return ['Communication', 'Problem Solving'];
+  // A city/country alone or normal description does NOT prove on-site or remote
+  return 'Unspecified';
 };
 
 export const normalizeAdzunaJob = (result = {}, fallbackLocation = '') => {
-  const title = String(result.title || 'New Opportunity').trim();
-  const companyName = String(result.company?.display_name || 'Adzuna').trim();
-  const location = String(result.location?.display_name || fallbackLocation || 'Remote').trim();
-  const description = String(
-    result.description ||
-      `${title} with ${companyName}. Explore this opportunity and apply today.`
-  ).trim();
-  const salary = formatSalary(result.salary_min, result.salary_max);
-  const skills = extractSkills(title, description);
+  const loc = result.location?.display_name || fallbackLocation || '';
+  const workMode = inferWorkMode(result, fallbackLocation);
 
-  return {
-    title,
-    company: companyName,
-    companyLogo: String(result.company?.logo || '').trim(),
-    description,
-    location,
-    jobType: inferJobType(result),
-    workMode: inferWorkMode(result, fallbackLocation),
-    experienceLevel: inferExperienceLevel(`${title} ${description}`),
-    skills,
-    salary,
-    source: 'Adzuna',
-    sourceUrl: String(result.redirect_url || result.url || '').trim(),
-    applyUrl: String(result.redirect_url || result.url || '').trim(),
-    postedAt: result.created ? new Date(result.created) : new Date(),
-    deadline: null,
-    isActive: true,
-  };
+  return normalizeJobRecord({
+    provider: 'Adzuna',
+    providerJobId: result.id != null ? String(result.id) : '',
+    title: result.title,
+    company: result.company?.display_name,
+    companyLogo: result.company?.logo,
+    description: result.description,
+    location: loc,
+    employmentType: inferJobType(result),
+    workMode,
+    remote: workMode === 'Remote',
+    experienceLevel: `${result.title || ''}`,
+    salaryMin: result.salary_min,
+    salaryMax: result.salary_max,
+    postedAt: parseVerifiedPostingDate(result.created),
+    listingUrl: result.redirect_url || result.url,
+    metadata: {
+      rawArea: result.location?.area || [],
+      rawDisplayName: result.location?.display_name || '',
+    },
+  });
 };
 
-export const buildAdzunaSearchUrl = ({ keyword = '', location = '', page = 1, limit = 12 } = {}) => {
+export const buildAdzunaSearchUrl = ({ keyword = '', location = '', page = 1, limit = 12, jobType = '' } = {}) => {
   const appId = process.env.ADZUNA_APP_ID || DEFAULT_ADZUNA_APP_ID;
   const appKey = process.env.ADZUNA_APP_KEY || DEFAULT_ADZUNA_APP_KEY;
-  const queryPage = Number(page) || 1;
-  const resultsPerPage = Math.min(Number(limit) || 12, 50);
+  const queryPage = Math.max(1, Number(page) || 1);
+  const resultsPerPage = Math.min(Math.max(1, Number(limit) || 12), 50);
   const countryCode = (process.env.ADZUNA_COUNTRY || 'in').trim() || 'in';
 
   const searchUrl = `https://api.adzuna.com/v1/api/jobs/${countryCode}/search/${queryPage}`;
@@ -172,48 +149,112 @@ export const buildAdzunaSearchUrl = ({ keyword = '', location = '', page = 1, li
     `app_id=${encodeURIComponent(appId)}`,
     `app_key=${encodeURIComponent(appKey)}`,
     `results_per_page=${encodeURIComponent(String(resultsPerPage))}`,
-    `page=${encodeURIComponent(String(queryPage))}`,
+    'max_days_old=30',
   ];
 
-  if (keyword) params.push(`what=${encodeURIComponent(keyword)}`);
-  if (location) params.push(`where=${encodeURIComponent(location)}`);
+  const trimmedKeyword = keyword ? String(keyword).trim() : '';
+  const trimmedLocation = location ? String(location).trim() : '';
+  const isInternship = /\bintern/i.test(jobType);
 
-  console.log('[Adzuna] endpoint:', `/v1/api/jobs/${countryCode}/search/${queryPage}`);
-  console.log('[Adzuna] keyword:', keyword || 'not provided');
-  console.log('[Adzuna] location:', location || 'not provided');
-  console.log('[Adzuna] credentials configured:', Boolean(process.env.ADZUNA_APP_ID && process.env.ADZUNA_APP_KEY));
+  let searchTerm = trimmedKeyword;
+  if (isInternship) {
+    if (!searchTerm) {
+      searchTerm = 'internship';
+    } else if (!/\bintern/i.test(searchTerm)) {
+      searchTerm = `${searchTerm} internship`;
+    }
+  }
+
+  if (searchTerm) {
+    params.push(`what=${encodeURIComponent(searchTerm)}`);
+  } else if (!trimmedLocation) {
+    // Adzuna requires a query term if no location is specified
+    params.push('what=developer');
+  }
+
+  if (trimmedLocation) {
+    params.push(`where=${encodeURIComponent(trimmedLocation)}`);
+  }
 
   return `${searchUrl}?${params.join('&')}`;
 };
 
-export const fetchAdzunaJobs = async ({ keyword = '', location = '', page = 1, limit = 12 } = {}) => {
+export const ADZUNA_PAGE_SIZE = 50;
+export const ADZUNA_MAX_PAGES = Math.max(1, Number(process.env.ADZUNA_MAX_PAGES) || 50);
+
+const fetchAdzunaPage = async ({ keyword = '', location = '', page = 1, limit = ADZUNA_PAGE_SIZE, jobType = '' } = {}) => {
+  const url = buildAdzunaSearchUrl({ keyword, location, page, limit, jobType });
+  const response = await adzunaHttpsGet(url);
+  let payload = {};
+  try {
+    payload = JSON.parse(response.body);
+  } catch {
+    throw new Error(`Invalid JSON received from Adzuna (HTTP ${response.status})`);
+  }
+
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error(`Adzuna request failed with status ${response.status}`);
+  }
+
+  const results = Array.isArray(payload.results) ? payload.results : [];
+  const normalized = results.map((job) => normalizeAdzunaJob(job, location)).filter(Boolean);
+  const eligible = filterJobsByLast30Days(normalized);
+  eligible.totalCount = typeof payload.count === 'number' ? payload.count : eligible.length;
+  eligible.rawCount = results.length;
+  return eligible;
+};
+
+export const fetchAdzunaJobs = async ({
+  keyword = '',
+  location = '',
+  page = 1,
+  limit = 12,
+  jobType = '',
+  maxPages = 1,
+} = {}) => {
   if (!hasAdzunaCredentials()) {
     console.error('[Adzuna] Missing credentials. ADZUNA_APP_ID configured: false; ADZUNA_APP_KEY configured: false');
     throw new Error('Adzuna credentials are not configured');
   }
 
-  const url = buildAdzunaSearchUrl({ keyword, location, page, limit });
+  const pagesToFetch = Math.max(1, Number(maxPages) || 1);
+  const startPage = Math.max(1, Number(page) || 1);
+  const perPage = pagesToFetch > 1 ? ADZUNA_PAGE_SIZE : Math.min(Math.max(1, Number(limit) || 12), ADZUNA_PAGE_SIZE);
+  const pageNumbers = Array.from({ length: pagesToFetch }, (_, index) => startPage + index);
 
   try {
-    const response = await fetch(url);
-    console.log('[Adzuna] HTTP status:', response.status);
+    const pageResults = await mapPool(pageNumbers, 4, async (pageNum) => {
+      try {
+        return await fetchAdzunaPage({ keyword, location, page: pageNum, limit: perPage, jobType });
+      } catch (error) {
+        if (pageNum === startPage) throw error;
+        console.warn('[Adzuna] stopped paging at', pageNum, error.message);
+        return null;
+      }
+    });
 
-    const payload = await response.json();
-    const results = Array.isArray(payload.results) ? payload.results : [];
-    console.log('[Adzuna] result count:', results.length);
-
-    if (!response.ok) {
-      const safeMessage = payload?.message || payload?.error || response.statusText || 'Unknown error';
-      console.error('[Adzuna] provider error:', safeMessage);
-      throw new Error(`Adzuna request failed with status ${response.status}`);
+    const collected = [];
+    let reportedTotal = 0;
+    let totalRawReceived = 0;
+    for (const pageJobs of pageResults) {
+      if (!pageJobs || pageJobs.length === 0) continue;
+      reportedTotal = Math.max(reportedTotal, Number(pageJobs.totalCount) || 0);
+      totalRawReceived += Number(pageJobs.rawCount) || pageJobs.length;
+      collected.push(...pageJobs);
     }
 
-    const normalized = results.map((job) => normalizeAdzunaJob(job, location));
-    const successful = normalized.filter(Boolean).length;
-    const failed = results.length - successful;
-    console.log('[Adzuna] successfully normalized:', successful);
-    console.log('[Adzuna] failed normalization:', failed);
-    return normalized.filter(Boolean);
+    const eligibleJobs = filterJobsByLast30Days(collected);
+    eligibleJobs.totalCount = reportedTotal || eligibleJobs.length;
+    eligibleJobs.reportedTotal = reportedTotal;
+    eligibleJobs.ingested = eligibleJobs.length;
+    eligibleJobs.rawReceived = totalRawReceived;
+    eligibleJobs.truncated = reportedTotal > eligibleJobs.length;
+    eligibleJobs.jobs = eligibleJobs;
+
+    console.log(
+      `[Adzuna Diagnostics] queries=1, pagesRequested=${pagesToFetch}, rawReceived=${totalRawReceived}, recent30Days=${eligibleJobs.length}, reportedTotal=${reportedTotal}`
+    );
+    return eligibleJobs;
   } catch (error) {
     console.error('[Adzuna] fetch failed:', error.message);
     throw error;
@@ -226,18 +267,41 @@ export const upsertAdzunaJobs = async (jobs = []) => {
   }
 
   try {
-    const operations = jobs.map((job) => ({
-      updateOne: {
-        filter: { sourceUrl: job.sourceUrl || job.applyUrl },
-        update: { $set: { ...job, source: 'Adzuna' } },
-        upsert: true,
-      },
-    }));
+    const operations = jobs.map((job) => {
+      const { _id, ...jobData } = job;
+      return {
+        updateOne: {
+          filter: { sourceUrl: job.sourceUrl || job.applyUrl },
+          update: { $set: { ...jobData, source: 'Adzuna' } },
+          upsert: true,
+        },
+      };
+    });
 
-    const result = await Job.bulkWrite(operations, { ordered: false });
-    return result?.upsertedCount || 0;
+    await Job.bulkWrite(operations, { ordered: false });
+
+    // Retrieve saved documents to get their real MongoDB _ids
+    const sourceUrls = jobs.map((j) => j.sourceUrl || j.applyUrl).filter(Boolean);
+    const dbDocs = await Job.find({ sourceUrl: { $in: sourceUrls } }).lean();
+    const docMap = new Map();
+    dbDocs.forEach((doc) => {
+      const key = doc.sourceUrl || doc.applyUrl;
+      if (key) docMap.set(key, doc);
+    });
+
+    return jobs.map((job) => {
+      const key = job.sourceUrl || job.applyUrl;
+      const matched = docMap.get(key);
+      if (matched) {
+        return {
+          ...matched,
+          _id: String(matched._id),
+        };
+      }
+      return job;
+    });
   } catch (error) {
     console.warn('Adzuna sync to MongoDB failed:', error.message);
-    return 0;
+    return jobs;
   }
 };

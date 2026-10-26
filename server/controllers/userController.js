@@ -16,6 +16,16 @@ const sanitizeUser = (user) => ({
   preferredWorkModes: user.preferredWorkModes || [],
   resume: user.resume || '',
   socialLinks: user.socialLinks || {},
+  notificationPreferences: user.notificationPreferences || {
+    jobAlerts: true,
+    applicationReminders: true,
+    interviewReminders: true,
+  },
+  googleCalendar: {
+    connected: Boolean(user.googleCalendar?.connected),
+    connectedEmail: user.googleCalendar?.connectedEmail || '',
+    connectedAt: user.googleCalendar?.connectedAt || null,
+  },
   createdAt: user.createdAt,
   updatedAt: user.updatedAt,
 });
@@ -52,6 +62,7 @@ export const updateProfile = asyncHandler(async (req, res) => {
     'preferredWorkModes',
     'resume',
     'socialLinks',
+    'notificationPreferences',
   ];
 
   const updates = {};

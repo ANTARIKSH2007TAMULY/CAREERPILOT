@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "node --watch index.js",
     "start": "node index.js",
-    "seed": "node seed/seedJobs.js"
+    "seed": "node seed/seedJobs.js",
+    "test": "node --test tests/*.test.js",
+    "verify:integrations": "node scripts/verifyIntegrations.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

@@ -4,22 +4,29 @@ import cors from 'cors';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
 
+import { validateEnvOnStartup } from './config/env.js';
 import { connectDB } from './config/db.js';
 import { connectRedis } from './config/redis.js';
 import { startWorkers } from './queues/workers.js';
 import { apiRateLimiter } from './middleware/rateLimitMiddleware.js';
 import { errorHandler, notFound } from './middleware/errorMiddleware.js';
+import { getLiveness, getReadiness } from './controllers/healthController.js';
 
 import authRoutes from './routes/authRoutes.js';
 import userRoutes from './routes/userRoutes.js';
 import jobRoutes from './routes/jobRoutes.js';
 import savedJobRoutes from './routes/savedJobRoutes.js';
 import applicationRoutes from './routes/applicationRoutes.js';
+import interviewRoutes from './routes/interviewRoutes.js';
 import analyticsRoutes from './routes/analyticsRoutes.js';
 import aiRoutes from './routes/aiRoutes.js';
+import integrationRoutes from './routes/integrationRoutes.js';
+import { reconcilePendingReminders } from './services/interview/interviewScheduler.js';
 
 const app = express();
 const PORT = Number(process.env.PORT) || 5001;
+
+app.set('trust proxy', 1);
 
 app.use(
   helmet({
@@ -38,34 +45,32 @@ app.use(express.json({ limit: '1mb' }));
 app.use(cookieParser());
 app.use(apiRateLimiter);
 
-app.get('/api/health', (req, res) => {
-  res.status(200).json({
-    success: true,
-    data: { status: 'ok' },
-  });
-});
+app.get('/api/health', getLiveness);
+app.get('/api/health/ready', getReadiness);
 
 app.use('/api/auth', authRoutes);
 app.use('/api/user', userRoutes);
 app.use('/api/jobs', jobRoutes);
 app.use('/api/saved-jobs', savedJobRoutes);
 app.use('/api/applications', applicationRoutes);
+app.use('/api/interviews', interviewRoutes);
 app.use('/api/analytics', analyticsRoutes);
 app.use('/api/ai', aiRoutes);
+app.use('/api/integrations', integrationRoutes);
 
 app.use(notFound);
 app.use(errorHandler);
 
 const bootstrap = async () => {
-  console.log('ADZUNA_APP_ID configured:', Boolean(process.env.ADZUNA_APP_ID));
-  console.log('ADZUNA_APP_KEY configured:', Boolean(process.env.ADZUNA_APP_KEY));
+  validateEnvOnStartup();
 
   await connectDB();
   await connectRedis();
   await startWorkers();
+  await reconcilePendingReminders();
 
-  app.listen(PORT, () => {
-    console.log(`CareerPilot server running on http://localhost:${PORT}`);
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`CareerPilot server running on port ${PORT}`);
   });
 };
 

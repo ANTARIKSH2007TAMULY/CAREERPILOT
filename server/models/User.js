@@ -47,6 +47,21 @@ const userSchema = new mongoose.Schema(
       github: { type: String, default: '' },
       portfolio: { type: String, default: '' },
     },
+    notificationPreferences: {
+      jobAlerts: { type: Boolean, default: true },
+      applicationReminders: { type: Boolean, default: true },
+      interviewReminders: { type: Boolean, default: true },
+      unsubscribedAt: { type: Date, default: null },
+    },
+    googleCalendar: {
+      connected: { type: Boolean, default: false },
+      connectedEmail: { type: String, default: '', trim: true },
+      encryptedAccessToken: { type: String, default: '' },
+      encryptedRefreshToken: { type: String, default: '' },
+      expiryDate: { type: Date, default: null },
+      scope: { type: String, default: '' },
+      connectedAt: { type: Date, default: null },
+    },
   },
   { timestamps: true }
 );

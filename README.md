@@ -101,16 +101,30 @@ npm run dev
 
 ## Environment variables
 
-See `.env.example`.
+Copy `.env.example` to `.env` at the repository root. The server also reads `server/.env` if present. Both files are gitignored.
 
-Required values:
-- PORT
-- MONGODB_URI
-- JWT_SECRET
-- CLIENT_URL
-- REDIS_URL
-- GEMINI_API_KEY
-- GROK_API_KEY
+Required for a normal local app:
+- `PORT`
+- `MONGODB_URI`
+- `JWT_SECRET`
+- `CLIENT_URL`
+
+Optional infrastructure:
+- `REDIS_URL` — enable Redis cache and BullMQ workers. If unset, the API still starts.
+
+Optional integrations (missing keys disable only that provider):
+- `ADZUNA_APP_ID`, `ADZUNA_APP_KEY`, `ADZUNA_COUNTRY`
+- `THEMUSE_API_KEY` — optional; The Muse public jobs API works without it at a lower rate limit
+- Remotive — no API key. Uses `https://remotive.com/api/remote-jobs`. The public JSON catalog is a delayed, curated subset (10 listings when last verified); a private API is quoted in Remotive’s payload at a starting budget of $5k/mo via hello@remotive.com.
+- `GEMINI_API_KEY`, `GEMINI_MODEL`, `GROK_API_KEY`, `GROK_MODEL`, `AI_PROVIDER` (`auto`, `gemini`, or `grok`)
+- `RESEND_API_KEY`, `EMAIL_FROM`
+- `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`, `GOOGLE_PROJECT_ID`
+
+Never put secrets in Vite `VITE_*` variables or client code.
+
+### Disable an optional provider
+
+Leave its key empty. For AI, heuristic fallbacks remain. For jobs, other configured providers still return results.
 
 ## MongoDB setup
 
@@ -152,6 +166,18 @@ npm run server
 npm run seed
 ```
 
+### Tests and live integration checks
+
+```bash
+npm test                      # Runs full backend test suite (49 unit & integration tests)
+npm --workspace client run build  # Validates frontend production build
+npm run verify:integrations   # Runs live read-only verification against configured services
+```
+
+The server test suite includes 49 tests covering multi-provider job adapters (Adzuna, The Muse, Remotive), job aggregation, global filtering & internship normalization, deterministic sorting, AI provider schemas and heuristic fallbacks, Redis/BullMQ queue isolation and degraded mode handling, Resend email templates & preference checks, and Google Calendar OAuth HMAC validation and token encryption.
+
+Live verification uses the local `.env` and makes the smallest safe provider requests it can. It does not send email or create calendar events.
+
 ## Seeding database
 
 The seed script creates 24 realistic job and internship records covering software engineering, data, AI, frontend, backend, DevOps, and analytics roles.
@@ -188,6 +214,20 @@ Base URL: `/api`
 ### AI
 - POST /api/ai/job-match
 - POST /api/ai/chat
+- POST /api/ai/resume-analysis
+- POST /api/ai/roadmap
+- POST /api/ai/interview-prep
+
+### Health
+- GET /api/health
+- GET /api/health/ready
+
+### Integrations
+- GET /api/integrations/google/status
+- GET /api/integrations/google/connect
+- GET /api/integrations/google/callback
+- GET /api/integrations/google/test
+- POST /api/integrations/google/disconnect
 
 ## Authentication
 
@@ -195,25 +235,41 @@ Authentication uses JWT stored in an HTTP-only cookie. The token is never stored
 
 ## AI architecture
 
-The AI layer is built on a provider abstraction so future integrations can be added cleanly.
+The backend selects Gemini or Grok from `AI_PROVIDER` without changing feature routes. Responses are schema-validated. If a provider fails or returns invalid JSON, CareerPilot falls back to a labeled heuristic result instead of returning fabricated AI output.
 
-Current providers:
-- Gemini
-- Grok
-- local heuristic fallback when no provider keys are configured
+Use cases:
+- job-match explanations
+- resume/skill-gap analysis from the saved profile
+- learning roadmaps
+- interview preparation
+- career chat using the authorized profile
 
-This keeps keys server-side and avoids exposing them in the client.
+## Job providers
+
+Search aggregates Adzuna, The Muse, and Remotive. Partial provider failure still returns successful results plus provider health metadata. Remotive listings keep the original Remotive URL and source attribution. Remotive responses are cached (about 6 hours) to stay within their request guidance (about 4 requests/day, and avoid polling more than twice per minute). Official docs describe `category`, `company_name`, `search`, and `limit` (default: all) and do not document page/offset pagination; live public responses have returned the same 10 job IDs even with `limit=50`, `search=engineer`, and `category=software-dev`. Documented category XML feeds returned HTTP 404 when checked. Broader access requires Remotive’s private paid API (`hello@remotive.com`). The Muse public API allows 500 requests/hour without a key and 3600/hour with `api_key`.
+
+## Email (Resend)
+
+Transactional email is backend-only. Automated tests never send mail. Production sending needs a verified Resend domain in `EMAIL_FROM`. Users can disable alerts through `notificationPreferences`.
+
+## Google Calendar
+
+OAuth uses `https://www.googleapis.com/auth/calendar.readonly`. Tokens are encrypted and stored on the user document. The default redirect URI is:
+
+```text
+http://localhost:5001/api/integrations/google/callback
+```
+
+That value must match the Google Cloud OAuth client exactly. Add your Google account as a test user while the consent screen is in testing. CareerPilot does not create calendar events unless you later approve that behavior.
 
 ## BullMQ architecture
 
-BullMQ queues are prepared for:
-- job synchronization
-- AI recommendation workflows
-- resume analysis
-- cover letter generation
-- deadline notifications
+Workers start only when Redis responds to PING:
+- `jobSyncQueue`
+- `aiQueue`
+- `notificationQueue`
 
-The app does not depend on these workers being active to function.
+Jobs use attempts with exponential backoff. Email workers skip sending unless `allowSend` is set, and they honor an idempotency key.
 
 ## Deployment guidance
 
@@ -221,10 +277,13 @@ For deployment, configure a hosted MongoDB instance, Redis instance, and secure 
 
 ## Troubleshooting
 
-- If MongoDB is not available, start it with Docker or provide a valid MONGODB_URI.
-- If Redis is unavailable, the app still works because caching is optional.
-- If AI credentials are missing, the app uses local heuristic scoring instead of failing.
-- If port conflicts occur, change the PORT variable in the environment.
+- Missing optional API keys: the rest of the app still starts. Check `/api/health/ready`.
+- If MongoDB is not available, start it with Docker or provide a valid `MONGODB_URI`.
+- Redis down: cache and workers are skipped.
+- Google redirect mismatch: add the exact `GOOGLE_REDIRECT_URI` under Google Auth Platform → Clients.
+- Resend 403 on send: verify the sender domain; the onboarding address cannot send arbitrary production mail.
+- Remotive empty/blocked: wait and reduce polling; do not scrape remotive.com. A 10-job public payload is the current curated catalog, not a CareerPilot page-size cap.
+- If port conflicts occur, change the `PORT` variable.
 
 ## Future roadmap
 

@@ -17,7 +17,7 @@ const protect = asyncHandler(async (req, res, next) => {
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET || 'dev-secret-change-me');
     const user = isMongoConnected()
-      ? await User.findById(decoded.id).select('-password')
+      ? await User.findById(decoded.id).select('-password -googleCalendar.encryptedAccessToken -googleCalendar.encryptedRefreshToken')
       : findDemoUserById(decoded.id);
 
     if (!user) {
