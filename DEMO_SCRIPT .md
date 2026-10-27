@@ -1,5 +1,5 @@
 # CareerPilot Demo Script
-
+**Demo Video:** https://drive.google.com/file/d/1p7aJ3BejJhyOQ5d-hn-_AJZmJhN6ZYU-/view?usp=drivesdk 
 **Live application:** https://careerpilot-self-ten.vercel.app/
 **Duration:** 6–8 minutes on the trimmed path (skip the items marked *optional*); about 9 minutes with every step
 **Audience:** evaluators or reviewers seeing the deployed app for the first time
