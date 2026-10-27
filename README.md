@@ -1,4 +1,5 @@
 # CareerPilot
+**Demo Video:** https://drive.google.com/file/d/1p7aJ3BejJhyOQ5d-hn-_AJZmJhN6ZYU-/view?usp=drivesdk 
 
 CareerPilot is a full-stack job discovery and application-tracking platform for students and early-career job seekers. It aggregates live job listings from three providers, lets users save roles and track applications through a Kanban pipeline, shows pipeline analytics, and adds Gemini-powered career tools (job-fit analysis, resume review, and a career coach).
 
