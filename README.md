@@ -1,303 +1,282 @@
 # CareerPilot
 
-CareerPilot is an AI-powered job discovery and application management platform for students and early-career developers. It combines job search, profile management, saved opportunities, application tracking, dashboard analytics, and AI-assisted match analysis in a single SaaS-style experience.
+CareerPilot is a full-stack job discovery and application-tracking platform for students and early-career job seekers. It aggregates live job listings from three providers, lets users save roles and track applications through a Kanban pipeline, shows pipeline analytics, and adds Gemini-powered career tools (job-fit analysis, resume review, and a career coach).
 
-## Overview
+| | |
+|---|---|
+| **Live application** | https://careerpilot-self-ten.vercel.app/ |
+| **Source repository** | https://github.com/ANTARIKSH2007TAMULY/CAREERPILOT |
+| **Author profile** | https://github.com/ANTARIKSH2007TAMULY |
 
-The platform helps users:
-- register and manage a professional profile
-- discover jobs and internships
-- save opportunities and track them
-- apply through external company links
-- manage application stages in a kanban flow
-- monitor deadlines and response metrics
-- get AI-assisted job match insights and career coaching guidance
+> The live URL is the React frontend (hosted on Vercel). The backend API host is not defined anywhere in the repository; the frontend reaches it through the build-time variable `VITE_API_URL` (see [Deployment](#deployment)).
 
-## Tech stack
-
-- Frontend: React, Vite, JavaScript, Tailwind CSS, React Router
-- Backend: Node.js, Express.js, MongoDB, Mongoose
-- Auth: JWT in HTTP-only cookies, bcryptjs
-- Caching: Redis
-- Background jobs: BullMQ
-- AI: provider abstraction for Gemini and Grok with future support for other providers
-- Analytics: Recharts
-- UI: Lucide React, Framer Motion
-
-## Architecture
-
-The project is organized as a monorepo:
-
-- client/: React + Vite frontend
-- server/: Express.js API + MongoDB models + services
-- root: shared scripts, environment config, Docker setup
+---
 
 ## Features
 
-- secure auth flow with http-only cookies
-- job search, filtering, pagination, and details pages
-- saved jobs and application tracker with kanban boards
-- analytics dashboard with real application data
-- AI job match analysis with provider abstraction
-- AI career coach architecture and UI shell
-- resume analysis preparation and future extensibility
-- Redis caching with graceful fallback
-- BullMQ worker scaffolding for async jobs
+**Job discovery**
+- Aggregates jobs from **Adzuna**, **The Muse**, and **Remotive**, normalizes them into one schema, de-duplicates them, and keeps only postings from the last 30 days.
+- Search by keyword and location; filter by job type, work mode, experience level, skills, and source; sort by newest, oldest, highest salary, or title; paginated results.
+- Job details page with the full description, skills, and an external "apply" link.
 
-## Folder structure
+**Saving and tracking**
+- Save and unsave jobs (`/saved-jobs`).
+- Application tracker (`/applications`) with a Kanban board and a list view, nine statuses (`SAVED`, `INTERESTED`, `APPLIED`, `ASSESSMENT`, `INTERVIEW`, `OFFER`, `ACCEPTED`, `REJECTED`, `WITHDRAWN`), a recorded status history, notes, deadlines, and duplicate detection.
+- Track a job directly from its details page and change its status there.
+- Interviews can be scheduled against an application (type, time, timezone, meeting link, interviewer, notes, per-interval reminder preferences).
+
+**Dashboard and analytics**
+- Dashboard with summary statistics, a trend chart (7 days / 30 days / 90 days / 6 months), recent applications, and upcoming deadlines and interviews.
+- Analytics page with applications over time, applications by stage, by job type, and by work mode, plus response rate, interview conversion, offer conversion, and rejection rate.
+
+**AI features (Google Gemini)**
+- **Job match** on the job details page: score, strengths, missing skills, recommendations.
+- **Resume analysis** (`/resume`): strengths, skill gaps, suggestions.
+- **AI Career Coach** (`/ai-coach`): chat with recent-history context and suggested prompts.
+- Per-user daily/monthly request and token quotas, with a usage endpoint.
+- Local heuristic fallbacks when Gemini is not configured (responses are labelled as not AI-generated).
+
+**Profile and account**
+- Candidate profile (skills, education, experience, preferred roles/locations/job types/work modes, resume text, social links).
+- Registration, login, logout, password change, notification preferences.
+- Light/dark/system theme.
+
+**Google Calendar (read-only)**
+- Connect and disconnect a Google account from **Settings → Google Calendar integration**, and run a connection test. See [Google Calendar](#google-calendar).
+
+---
+
+## Technology stack
+
+| Layer | Technology |
+|---|---|
+| Frontend | React 18, Vite 5, React Router 6, Tailwind CSS 3, Axios, Recharts, Framer Motion, Lucide React |
+| Backend | Node.js (ES modules), Express 4, Mongoose 8 |
+| Database | MongoDB |
+| Auth | JWT in an HTTP-only cookie, bcryptjs |
+| Security middleware | Helmet, CORS (single configured origin), `express-rate-limit` |
+| AI | Google Gemini via the REST API (`generativelanguage.googleapis.com`) |
+| Job providers | Adzuna, The Muse, Remotive |
+| Email | Resend (REST API) |
+| Calendar | Google OAuth 2.0 + Google Calendar API v3 (read-only) |
+| Optional infrastructure | Redis (`redis` client) and BullMQ — **optional**, see [Redis](#redis-is-optional) |
+| Testing | Node's built-in test runner (`node --test`) |
+
+---
+
+## Architecture overview
+
+```text
+Browser (React SPA, Vercel)
+        │  HTTPS, cookie-based session (withCredentials)
+        ▼
+Express API  ──►  MongoDB (users, jobs, saved jobs, applications, interviews, AI usage)
+   │   ├──►  Adzuna / The Muse / Remotive   (job aggregation)
+   │   ├──►  Google Gemini                  (AI features, dual-key failover)
+   │   ├──►  Google OAuth + Calendar API    (read-only events)
+   │   ├──►  Resend                         (email)
+   │   └──►  Redis + BullMQ                 (optional: cache, reminder queue)
+```
+
+See [`ARCHITECTURE.md`](ARCHITECTURE.md) for diagrams and detail.
+
+---
+
+## Project structure
 
 ```text
 careerpilot/
-├── client/
+├── client/                      # React + Vite frontend (workspace: careerpilot-client)
 │   ├── src/
-│   └── package.json
-├── server/
-│   ├── config/
-│   ├── controllers/
-│   ├── middleware/
-│   ├── models/
-│   ├── routes/
+│   │   ├── App.jsx              # Route table + ProtectedRoute
+│   │   ├── components/          # ai/, applications/, dashboard/, jobs/, layout/, ui/
+│   │   ├── context/             # AuthContext, ThemeContext
+│   │   ├── pages/               # Landing, Login, Register, Dashboard, Jobs, JobDetails,
+│   │   │                        # SavedJobs, Applications, Resume, Analytics, AICoach,
+│   │   │                        # Profile, Settings (+ Calendar.jsx, not routed)
+│   │   ├── services/            # Axios API clients
+│   │   └── utils/
+│   ├── vercel.json              # SPA rewrite to /index.html
+│   └── vite.config.js           # dev server :5173, proxies /api → localhost:5001
+├── server/                      # Express API (workspace: careerpilot-server)
+│   ├── index.js                 # Entry point
+│   ├── config/                  # env, db, redis, in-memory demo stores
+│   ├── controllers/  routes/  middleware/  models/  utils/
 │   ├── services/
-│   ├── queues/
-│   ├── seed/
-│   ├── utils/
-│   └── index.js
-├── .env.example
-├── .gitignore
-├── docker-compose.yml
-├── package.json
-├── README.md
-└── ...
+│   │   ├── ai/                  # geminiProvider, geminiKeyManager, aiService, aiQuotaService, aiSchemas
+│   │   ├── jobs/                # jobAggregator, adzuna/muse/remotive adapters, normalization, ingestion status
+│   │   ├── calendar/            # googleCalendarService
+│   │   ├── email/               # resendService
+│   │   └── interview/           # interviewScheduler
+│   ├── queues/                  # BullMQ queues and workers (Redis only)
+│   ├── seed/seedJobs.js         # Optional sample jobs
+│   ├── scripts/                 # verifyIntegrations.js, repairWorkLocation.js
+│   └── tests/                   # 17 test files
+├── docker-compose.yml           # MongoDB 7 and Redis 7 for local development
+├── .env.example                 # Environment variable template
+└── package.json                 # npm workspaces: client, server
 ```
 
-## Installation
+---
 
-1. Clone the repository.
-2. Install dependencies:
+## Getting started
+
+### Prerequisites
+- Node.js 20 or newer (built and tested on Node 22) and npm
+- A MongoDB instance (local, Docker, or Atlas)
+- Optional: API keys for Gemini, Adzuna, Resend, and Google OAuth credentials
+
+### Install
 
 ```bash
-npm install
+git clone https://github.com/ANTARIKSH2007TAMULY/CAREERPILOT.git
+cd CAREERPILOT
+npm install            # installs both workspaces
 ```
 
-3. Copy the environment example file:
+### Configure the environment
 
 ```bash
 cp .env.example .env
 ```
 
-4. Update environment values as needed.
+The server loads `.env` from the working directory, the repository root, or `server/`. Never commit `.env`; it is listed in `.gitignore`.
 
-5. Start MongoDB and Redis locally or via Docker:
+| Variable | Purpose | Notes |
+|---|---|---|
+| `PORT` | API port | Default `5001` |
+| `MONGODB_URI` | MongoDB connection string | Default `mongodb://127.0.0.1:27017/careerpilot` |
+| `JWT_SECRET` | Signs session tokens and OAuth state; also derives the AES key for stored Google tokens | **Required in production** |
+| `CLIENT_URL` | Allowed CORS origin and OAuth redirect target | Default `http://localhost:5173` |
+| `REDIS_URL` | Enables cache and BullMQ | **Optional.** Leave empty to run without Redis |
+| `AI_PROVIDER` | Present in `.env.example` | The code always uses Gemini |
+| `GEMINI_API_KEY`, `GEMINI_API_KEY_2` | Primary and secondary Gemini keys | Both optional; empty means heuristic fallbacks |
+| `GEMINI_MODEL` | Preferred model | Default `gemini-3.5-flash-lite` |
+| `AI_DAILY_REQUEST_LIMIT`, `AI_MONTHLY_REQUEST_LIMIT` | Per-user request quotas | Defaults `20` / `300` |
+| `AI_DAILY_TOKEN_LIMIT`, `AI_MONTHLY_TOKEN_LIMIT` | Per-user token quotas | Defaults `50000` / `500000` |
+| `AI_MAX_REQUEST_TOKENS`, `AI_MAX_OUTPUT_TOKENS` | Input and output size caps | Defaults `6000` / `2000` |
+| `AI_RATE_LIMIT_PER_MINUTE` | Per-user AI requests per minute | Default `5` |
+| `AI_USAGE_TIMEZONE` | Present in `.env.example` | Quota windows are computed in UTC in the current code |
+| `ADZUNA_APP_ID`, `ADZUNA_APP_KEY`, `ADZUNA_COUNTRY`, `ADZUNA_MAX_PAGES` | Adzuna provider | Provider is skipped without ID and key; country default `in` |
+| `THEMUSE_API_KEY`, `MUSE_MAX_PAGES`, `MUSE_PRIMARY_PAGES` | The Muse provider | Works without a key (public API); key is sent if set |
+| `RESEND_API_KEY`, `EMAIL_FROM` | Email via Resend | Optional |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`, `GOOGLE_PROJECT_ID` | Google Calendar OAuth | `GOOGLE_REDIRECT_URI` must exactly match the URI registered in Google Cloud |
 
-```bash
-docker compose up -d
-```
+The frontend has one optional build-time variable, `VITE_API_URL` (API base URL). It defaults to `/api`, which the Vite dev server proxies to `http://localhost:5001`.
 
-6. Run the app:
-
-```bash
-npm run dev
-```
-
-## Environment variables
-
-Copy `.env.example` to `.env` at the repository root. The server also reads `server/.env` if present. Both files are gitignored.
-
-Required for a normal local app:
-- `PORT`
-- `MONGODB_URI`
-- `JWT_SECRET`
-- `CLIENT_URL`
-
-Optional infrastructure:
-- `REDIS_URL` — enable Redis cache and BullMQ workers. If unset, the API still starts.
-
-Optional integrations (missing keys disable only that provider):
-- `ADZUNA_APP_ID`, `ADZUNA_APP_KEY`, `ADZUNA_COUNTRY`
-- `THEMUSE_API_KEY` — optional; The Muse public jobs API works without it at a lower rate limit
-- Remotive — no API key. Uses `https://remotive.com/api/remote-jobs`. The public JSON catalog is a delayed, curated subset (10 listings when last verified); a private API is quoted in Remotive’s payload at a starting budget of $5k/mo via hello@remotive.com.
-- `GEMINI_API_KEY`, `GEMINI_MODEL`, `GROK_API_KEY`, `GROK_MODEL`, `AI_PROVIDER` (`auto`, `gemini`, or `grok`)
-- `RESEND_API_KEY`, `EMAIL_FROM`
-- `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`, `GOOGLE_PROJECT_ID`
-
-Never put secrets in Vite `VITE_*` variables or client code.
-
-### Disable an optional provider
-
-Leave its key empty. For AI, heuristic fallbacks remain. For jobs, other configured providers still return results.
-
-## MongoDB setup
-
-A local MongoDB instance can be used or Docker can be used with the included compose file.
-
-Example URI:
+### Run locally
 
 ```bash
-mongodb://127.0.0.1:27017/careerpilot
+npm run dev            # API (node --watch) and Vite dev server together
 ```
 
-## Redis setup
+- Frontend: http://localhost:5173
+- API: http://localhost:5001 (health check: `GET /api/health`, readiness: `GET /api/health/ready`)
 
-Redis is optional. When unavailable, the app degrades gracefully and continues without caching.
+Individual processes: `npm run server`, `npm run client`.
 
-Example URI:
+Optional: `npm run seed` inserts a handful of sample jobs (source `CareerPilot`) into MongoDB. Job search works without it because the providers populate the catalog.
+
+Optional: `docker compose up -d mongo` starts a local MongoDB 7. The Compose file also defines a Redis service, but you do not need it.
+
+### Build and test
 
 ```bash
-redis://localhost:6379
+npm run build                  # production build of the client → client/dist
+npm test                       # server tests, then client tests
+npm run verify:integrations    # live checks against configured providers (uses your real keys)
 ```
 
-## Running locally
+Other scripts: `npm --workspace server start` (production-style start), `npm --workspace client run preview` (serve the build on port 4173).
 
-### Start frontend only
+---
 
-```bash
-npm run client
-```
+## Redis is optional
 
-### Start backend only
+CareerPilot runs without Redis. If `REDIS_URL` is empty, or the connection attempt fails (1.5 s connect timeout, 2 s overall, no retry), the server logs a notice and continues:
 
-```bash
-npm run server
-```
+- No Redis cache is used. Job aggregation uses an in-process cache with a 15-minute TTL instead.
+- BullMQ queues and workers are not created. The log shows `BullMQ workers skipped because Redis is unavailable.`
+- Interview reminders are stored on the interview record but **not delivered automatically**, because delayed reminder delivery is implemented only through the BullMQ notification queue. Manually triggered test emails still work (`POST /api/interviews/:id/test-email`).
+- `GET /api/health/ready` reports `redis.operational: false` and still responds successfully.
 
-### Seed demo jobs
+The deployed application does not depend on Redis.
 
-```bash
-npm run seed
-```
+---
 
-### Tests and live integration checks
+## AI integration (Google Gemini)
 
-```bash
-npm test                      # Runs full backend test suite (49 unit & integration tests)
-npm --workspace client run build  # Validates frontend production build
-npm run verify:integrations   # Runs live read-only verification against configured services
-```
+- Gemini is the only AI provider. Requests go to the Gemini REST API with JSON-constrained output, a 15-second timeout per call, and schema validation of every response.
+- **Two keys.** `GEMINI_API_KEY` is the primary key and `GEMINI_API_KEY_2` the secondary. Keys are tried in order, so the secondary is used only when the primary fails; requests are not load-balanced. If the primary returns an authentication error (401/403/invalid key) it is marked invalid for the life of the process; on 429/quota errors or repeated 5xx/timeouts it goes on cooldown (60 s / 30 s). When a failure is eligible, the same request is retried on the other key.
+- **Models.** Each call tries `GEMINI_MODEL` first, then `gemini-3.5-flash-lite`, `gemini-3.5-flash`, and `gemini-flash-latest`.
+- **Fallbacks.** Job match and the coach fall back to a local heuristic if Gemini fails or is not configured. Resume analysis, roadmap, and interview prep fall back to heuristics when no key is configured or the model output fails validation, but return an error if every key fails at the network/API level.
+- **Quotas.** Every AI request reserves quota in MongoDB (per-minute, daily, monthly requests and tokens). If MongoDB is not connected, AI endpoints return HTTP 503 rather than run without quota enforcement.
+- **UI coverage.** The UI exposes job match, resume analysis, and the career coach. The API also has `POST /api/ai/roadmap` and `POST /api/ai/interview-prep`, which no page currently calls.
 
-The server test suite includes 49 tests covering multi-provider job adapters (Adzuna, The Muse, Remotive), job aggregation, global filtering & internship normalization, deterministic sorting, AI provider schemas and heuristic fallbacks, Redis/BullMQ queue isolation and degraded mode handling, Resend email templates & preference checks, and Google Calendar OAuth HMAC validation and token encryption.
+---
 
-Live verification uses the local `.env` and makes the smallest safe provider requests it can. It does not send email or create calendar events.
+## Job provider integrations
 
-## Seeding database
+| Provider | Endpoint family | Credentials |
+|---|---|---|
+| Adzuna | `api.adzuna.com/v1/api/jobs/{country}/search` | `ADZUNA_APP_ID` + `ADZUNA_APP_KEY` required |
+| The Muse | `themuse.com/api/public/jobs` | Optional `THEMUSE_API_KEY` |
+| Remotive | `remotive.com/api/remote-jobs` | None |
 
-The seed script creates 24 realistic job and internship records covering software engineering, data, AI, frontend, backend, DevOps, and analytics roles.
+Results are normalized (job type, work mode, experience level, salary, skills), de-duplicated by provider identity and a company/title/location fallback key, filtered to the last 30 days, and upserted into MongoDB. A background backfill (in-process, not Redis) continues ingesting The Muse and a set of Adzuna keyword searches after the first search. `GET /api/jobs/ingestion-status` exposes progress.
 
-## API documentation
-
-Base URL: `/api`
-
-### Auth
-- POST /api/auth/register
-- POST /api/auth/login
-- POST /api/auth/logout
-- GET /api/auth/me
-
-### Jobs
-- GET /api/jobs
-- GET /api/jobs/:id
-
-### Saved Jobs
-- GET /api/saved-jobs
-- POST /api/saved-jobs/:jobId
-- DELETE /api/saved-jobs/:jobId
-
-### Applications
-- GET /api/applications
-- POST /api/applications
-- PATCH /api/applications/:id
-- DELETE /api/applications/:id
-
-### Analytics
-- GET /api/analytics/summary
-- GET /api/analytics/trends
-
-### AI
-- POST /api/ai/job-match
-- POST /api/ai/chat
-- POST /api/ai/resume-analysis
-- POST /api/ai/roadmap
-- POST /api/ai/interview-prep
-
-### Health
-- GET /api/health
-- GET /api/health/ready
-
-### Integrations
-- GET /api/integrations/google/status
-- GET /api/integrations/google/connect
-- GET /api/integrations/google/callback
-- GET /api/integrations/google/test
-- POST /api/integrations/google/disconnect
-
-## Authentication
-
-Authentication uses JWT stored in an HTTP-only cookie. The token is never stored in localStorage.
-
-## AI architecture
-
-The backend selects Gemini or Grok from `AI_PROVIDER` without changing feature routes. Responses are schema-validated. If a provider fails or returns invalid JSON, CareerPilot falls back to a labeled heuristic result instead of returning fabricated AI output.
-
-Use cases:
-- job-match explanations
-- resume/skill-gap analysis from the saved profile
-- learning roadmaps
-- interview preparation
-- career chat using the authorized profile
-
-## Job providers
-
-Search aggregates Adzuna, The Muse, and Remotive. Partial provider failure still returns successful results plus provider health metadata. Remotive listings keep the original Remotive URL and source attribution. Remotive responses are cached (about 6 hours) to stay within their request guidance (about 4 requests/day, and avoid polling more than twice per minute). Official docs describe `category`, `company_name`, `search`, and `limit` (default: all) and do not document page/offset pagination; live public responses have returned the same 10 job IDs even with `limit=50`, `search=engineer`, and `category=software-dev`. Documented category XML feeds returned HTTP 404 when checked. Broader access requires Remotive’s private paid API (`hello@remotive.com`). The Muse public API allows 500 requests/hour without a key and 3600/hour with `api_key`.
-
-## Email (Resend)
-
-Transactional email is backend-only. Automated tests never send mail. Production sending needs a verified Resend domain in `EMAIL_FROM`. Users can disable alerts through `notificationPreferences`.
+---
 
 ## Google Calendar
 
-OAuth uses `https://www.googleapis.com/auth/calendar.readonly`. Tokens are encrypted and stored on the user document. The default redirect URI is:
+Implemented:
+- OAuth 2.0 authorization-code flow with `access_type=offline`, a signed 10-minute `state` value bound to an HTTP-only cookie, and a callback at `/api/integrations/google/callback` that redirects back to `/settings`.
+- **Scopes requested: `calendar.readonly`, `userinfo.email`, `openid`.** The integration is read-only.
+- Access and refresh tokens are encrypted with AES-256-GCM before being stored on the user document and are never returned by the API. Expired access tokens are refreshed automatically; a revoked or expired grant marks the account disconnected.
+- Settings page: connect, disconnect (revokes the token at Google), and a connection test (lists calendars).
+- `GET /api/integrations/google/events` returns normalized events from the primary calendar (default window: seven days before the start of the current month through the 7th of next month; maximum range 180 days; meeting links extracted).
 
-```text
-http://localhost:5001/api/integrations/google/callback
-```
+Not implemented: creating, editing, or deleting Google Calendar events, and automatic synchronization of CareerPilot interviews into Google Calendar. A full calendar view page exists in the source (`client/src/pages/Calendar.jsx`) but is not wired into the router or sidebar, so the events endpoint is currently reachable through the API only. MongoDB is required to store tokens.
 
-That value must match the Google Cloud OAuth client exactly. Add your Google account as a test user while the consent screen is in testing. CareerPilot does not create calendar events unless you later approve that behavior.
+---
 
-## BullMQ architecture
+## Authentication and security
 
-Workers start only when Redis responds to PING:
-- `jobSyncQueue`
-- `aiQueue`
-- `notificationQueue`
+- Passwords are hashed with bcrypt (cost 12); minimum length 6.
+- Sessions use a 7-day JWT in an HTTP-only cookie (`secure` and `SameSite=None` when `NODE_ENV=production`, `SameSite=Lax` otherwise). All user data routes use the `protect` middleware, and queries are scoped to the authenticated user.
+- Helmet, CORS restricted to `CLIENT_URL` with credentials, JSON body limit of 1 MB, and a global limit of 200 requests per 15 minutes per client.
+- In production the server refuses to start with a missing or default `JWT_SECRET`.
+- Provider errors pass through a secret-redaction helper; error responses are generic in production.
+- Google tokens are encrypted at rest (see above). The encryption key is derived from `JWT_SECRET`, so rotating that secret invalidates sessions and stored Google tokens (users must reconnect).
 
-Jobs use attempts with exponential backoff. Email workers skip sending unless `allowSend` is set, and they honor an idempotency key.
+---
 
-## Deployment guidance
+## Deployment
 
-For deployment, configure a hosted MongoDB instance, Redis instance, and secure environment variables. The app is designed to run with a Node.js host and static frontend build served via a Vite production build or a CDN.
+- **Frontend:** `client/` is a standard Vite build with `vercel.json` rewriting all paths to `index.html` for client-side routing. Production URL: https://careerpilot-self-ten.vercel.app/. Set `VITE_API_URL` at build time to the public API base URL (including `/api`).
+- **Backend:** run `npm --workspace server start` on any Node host. The repository contains no platform-specific backend configuration; the latest commit message mentions Render, but no Render file is present. Set `NODE_ENV=production`, `MONGODB_URI`, `JWT_SECRET`, and set `CLIENT_URL` to `https://careerpilot-self-ten.vercel.app` so CORS and OAuth redirects work. `GOOGLE_REDIRECT_URI` must point to the backend's `/api/integrations/google/callback` and be registered in Google Cloud.
+- **Docker Compose** is for local MongoDB (and optional Redis) only; it does not package the application.
 
-## Troubleshooting
+---
 
-- Missing optional API keys: the rest of the app still starts. Check `/api/health/ready`.
-- If MongoDB is not available, start it with Docker or provide a valid `MONGODB_URI`.
-- Redis down: cache and workers are skipped.
-- Google redirect mismatch: add the exact `GOOGLE_REDIRECT_URI` under Google Auth Platform → Clients.
-- Resend 403 on send: verify the sender domain; the onboarding address cannot send arbitrary production mail.
-- Remotive empty/blocked: wait and reduce polling; do not scrape remotive.com. A 10-job public payload is the current curated catalog, not a CareerPilot page-size cap.
-- If port conflicts occur, change the `PORT` variable.
+## Known limitations
 
-## Future roadmap
+- **No MongoDB means demo mode.** If MongoDB is unreachable at startup the API continues using in-memory stores for users, saved jobs, applications, and interviews. Data is lost on restart, and AI features and Google Calendar connection are unavailable.
+- **Interview reminder emails require Redis.** Without it, reminders are recorded but not sent automatically. Job-alert and application-reminder email builders exist, but nothing in the application schedules them.
+- **Google Calendar is read-only** and its events page is not reachable from the UI (see above).
+- **Resume upload reads plain text only** (`.txt`, `.md`). PDF and DOCX files are attached by name but their content is not parsed.
+- **Cross-site cookies.** With the frontend on Vercel and the API on a different domain, login relies on third-party cookies; browsers that block them can prevent sign-in.
+- **Gemini key cooldown** is tracked in memory per server process and an expired cooldown is not re-evaluated on the request path; a cooled-down key is retried only after active keys have been tried.
+- Roadmap and interview-prep AI endpoints have no UI.
+- Search results depend on provider availability and quotas; Adzuna requires credentials.
 
-1. real job API integrations
-2. job aggregation and deduplication
-3. recommendation engine improvements
-4. advanced AI match scoring
-5. resume parser and ATS analysis
-6. cover letter generation
-7. skill gap analysis
-8. AI career coach and mock interviews
-9. email notifications and deadline reminders
-10. browser extension and deeper personalization
+---
 
-## Notes
+## Documentation
 
-This is the initial version of CareerPilot and intentionally focuses on a polished SaaS-like foundation with working auth, jobs, saved jobs, applications, analytics, and AI architecture.
+| File | Contents |
+|---|---|
+| [`ARCHITECTURE.md`](ARCHITECTURE.md) | Components, data model, request flows, Mermaid diagrams |
+| [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md) | Feature-by-feature status and test/build results |
+| [`DEMO_SCRIPT.md`](DEMO_SCRIPT.md) | 5–8 minute walkthrough of the live app |
+| [`FINAL_SUBMISSION_CHECKLIST.md`](FINAL_SUBMISSION_CHECKLIST.md) | Pre-submission checklist |
